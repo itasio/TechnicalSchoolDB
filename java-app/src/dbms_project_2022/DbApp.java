@@ -6,7 +6,6 @@ import java.sql.DriverManager;
 import java.sql.PreparedStatement;
 import java.sql.ResultSet;
 import java.sql.SQLException;
-import java.sql.Statement;
 import java.util.Random;
 
 public class DbApp {
@@ -23,17 +22,26 @@ public class DbApp {
 	}
 	
 	public void dbConnect(String ip, String dbName, String username, String password) {
+		String url = "jdbc:postgresql://" + ip + ":5432/" + dbName;
 		try {
-			conn = DriverManager.getConnection("jdbc:postgresql://"+ip+":5432/"+dbName, username, password);
-			System.out.println("Connection is successful conn:"+conn);
+			conn = DriverManager.getConnection(url, username, password);
+			System.out.println("Connection is successful.");
 		} catch (SQLException e) {
+			System.err.println("Could not connect to database.");
 			e.printStackTrace();
 		}
 	}
 	
 	public void dbClose() {
+
+		if (conn == null) {
+			return;
+		}
+
 		try {
-			conn.close();
+			if (!conn.isClosed()) {
+				conn.close();
+			}
 		} catch (SQLException e) {
 			e.printStackTrace();
 		}
@@ -48,154 +56,295 @@ public class DbApp {
 	 * @param   semester the academic semester of the LabModules
 	 */
 	public void showLabgrades(String amka, int year, String semester) {
-		try {
-			Statement st = conn.createStatement();
-			
-			//ResultSet res1 = st.executeQuery("select amka, surname, name from \"Person\" where amka = '11120003960'");
-			ResultSet res1 = st.executeQuery("select amka, surname, name from \"Person\" where amka = "+amka);
-			System.out.println("");
-			
-			while (res1.next()) {
-				System.out.println("AMKA:"+" "+res1.getString(1)+"\n"+"Surname:"+" "+res1.getString(2)+"\n"+"Name:"+" "+res1.getString(3));
-				
+
+		if (conn == null) {
+			System.err.println("No database connection.");
+			return;
+		}
+
+		String personSql =
+				"SELECT amka, surname, name " +
+						"FROM \"Person\" " +
+						"WHERE amka = ?";
+
+		String gradesSql =
+				"SELECT y.course_code, l.\"Title\", y.grade " +
+						"FROM \"LabModule\" l " +
+						"JOIN " +
+						"( " +
+						"    SELECT w.grade, x.course_code, x.module_no " +
+						"    FROM \"WorkGroup\" w " +
+						"    JOIN " +
+						"    ( " +
+						"        SELECT t1.course_code, " +
+						"               t1.module_no, " +
+						"               t1.\"workGroup_id\" " +
+						"        FROM " +
+						"        ( " +
+						"            SELECT * " +
+						"            FROM \"joins\" " +
+						"            WHERE student_amka = ? " +
+						"        ) t1 " +
+						"        JOIN " +
+						"        ( " +
+						"            SELECT * " +
+						"            FROM \"CourseRun\" " +
+						"            WHERE semesterrunsin = " +
+						"            ( " +
+						"                SELECT semester_id " +
+						"                FROM \"Semester\" " +
+						"                WHERE academic_year = ? " +
+						"                  AND academic_season = ? " +
+						"            ) " +
+						"        ) t2 " +
+						"        ON t1.\"courseRun_ser_num\" = t2.serial_number " +
+						"        AND t1.course_code = t2.course_code " +
+						"    ) x " +
+						"    ON w.\"wgID\" = x.\"workGroup_id\" " +
+						") y " +
+						"USING(module_no)";
+
+		/*
+		 * First query:
+		 * Retrieve the student's personal information.
+		 */
+		try (PreparedStatement pst = conn.prepareStatement(personSql)) {
+
+			pst.setString(1, amka);
+
+			try (ResultSet res = pst.executeQuery()) {
+
+				System.out.println();
+
+				while (res.next()) {
+					System.out.println(
+							"AMKA: " + res.getString("amka") +
+									"\nSurname: " + res.getString("surname") +
+									"\nName: " + res.getString("name")
+					);
+				}
 			}
-			
-			res1 = st.executeQuery("select y.course_code, l.\"Title\", y.grade			--course_code, title, grade of the LabModules that the student attends in specific semester\r\n"
-					+ "from \"LabModule\" l\r\n"
-					+ "join\r\n"
-					+ "\r\n"
-					+ "	(select w.grade, x.course_code, x.module_no			--grade, course_code, module_no of the LabModules that the student attends in specific semester\r\n"
-					+ "	from \"WorkGroup\" w\r\n"
-					+ "	join \r\n"
-					+ "\r\n"
-					+ "		 (select t1.course_code, t1.module_no, t1.\"workGroup_id\"			--course_code, module_no and wgId that the student attends in specific semester\r\n"
-					+ "		  from (select * from \"joins\" where student_amka = "+amka+") t1	--labModules that the student attends\r\n"
-					+ "		  join\r\n"
-					+ "			(select * 													--courses that that are teached in a specific semester and year\r\n"
-					+ "			 from \"CourseRun\" \r\n"
-					+ "			 where semesterrunsin = ( select semester_id as sid from \"Semester\" where academic_year ="+year+" and academic_season = "+semester+"))t2\r\n"
-					+ "		  on (t1.\"courseRun_ser_num\" = t2.serial_number and t1.course_code = t2.course_code)) x\r\n"
-					+ "\r\n"
-					+ "	on(w.\"wgID\" = x.\"workGroup_id\")) y\r\n"
-					+ "using(module_no)");
-			
-			System.out.println("");
-			System.out.println("Course_code"+"\t"+"Title"+"\t"+"Grade");
-			
-			while (res1.next()) {
-				System.out.println(res1.getString(1)+"\t"+"\t"+res1.getString(2)+"\t"+res1.getString(3));
-				
+
+		} catch (SQLException e) {
+			e.printStackTrace();
+			return;
+		}
+
+		/*
+		 * Second query:
+		 * Retrieve the LabModule grades.
+		 */
+		try (PreparedStatement pst = conn.prepareStatement(gradesSql)) {
+
+			pst.setString(1, amka);
+			pst.setInt(2, year);
+			pst.setString(3, semester);
+
+			try (ResultSet res = pst.executeQuery()) {
+
+				System.out.println();
+				System.out.println("Course_code\tTitle\tGrade");
+
+				while (res.next()) {
+					System.out.println(
+							res.getString(1) + "\t\t" +
+									res.getString(2) + "\t" +
+									res.getString(3)
+					);
+				}
 			}
-			
-			res1.close();
-			
+
 		} catch (SQLException e) {
 			e.printStackTrace();
 		}
-		
-		
 	}
-	
-	public void insert_Labmodules_workGroups(String courseCode, int sernum, int numOfModules,int numOfGroups ) {
+
+	/**
+	 * Inserts random LabModules and their WorkGroups for a CourseRun.
+	 */
+	public void insert_Labmodules_workGroups(String courseCode, int sernum, int numOfModules, int numOfGroups) {
+
+		if (conn == null) {
+			System.err.println("No database connection.");
+			return;
+		}
+
 		Random rand = new Random();
+
 		int minMember = 2;
 		int maxMember = 6;
-		try {
-			//PST FOR OUR DATABASE FROM PHASE A
-			//PreparedStatement pst = conn.prepareStatement("insert into \"LabModule\" values("
-				//											+ "(select max(module_no)+1 from \"LabModule\"),"
-				//											+" (((floor(random() * 6 + 2))*10)::numeric), ?, (left(md5(random()::character varying), 5)),'project'::labmodule_type,"+courseCode +", "+sernum+")");
-			PreparedStatement pst = conn.prepareStatement("insert into \"LabModule\" values("
-																+ courseCode+", "+sernum+", (select max(module_no)+1 from \"LabModule\"), ?::labmodule_type, (left(md5(random()::character varying), 5)), ?, (((floor(random() * 6 + 2))*10)::smallint))");
-				
-		
-			
-			
-			PreparedStatement pst2 = conn.prepareStatement("update \"Workgroup\"\r\n"
-														 + "set grade= ?\r\n"
-														 + "where\"wgID\"= ?");
-			
-			CallableStatement cst = conn.prepareCall("{call insert_workgroups2_2(?,?)}");
-			
-			Statement st = conn.createStatement();
-			Statement st2 = conn.createStatement();
-			for(int i = 0; i < numOfModules; i++) {				
-				////////////////////////////////////////////
-				pst.setInt(2, rand.nextInt(maxMember-minMember) + minMember);
+
+		String insertLabModuleSql =
+				"INSERT INTO \"LabModule\" " +
+						"VALUES (" +
+						"    ?, " +
+						"    ?, " +
+						"    (SELECT max(module_no) + 1 FROM \"LabModule\"), " +
+						"    ?::labmodule_type, " +
+						"    left(md5(random()::character varying), 5), " +
+						"    ?, " +
+						"    (((floor(random() * 6 + 2)) * 10)::smallint)" +
+						")";
+
+		String updateWorkgroupSql =
+				"UPDATE \"Workgroup\" " +
+						"SET grade = ? " +
+						"WHERE \"wgID\" = ?";
+
+		String maxModuleSql =
+				"SELECT max(module_no) " +
+						"FROM \"LabModule\"";
+
+		String workgroupIdsSql =
+				"SELECT \"wgID\" " +
+						"FROM \"Workgroup\" " +
+						"WHERE module_no = (" +
+						"    SELECT max(module_no) " +
+						"    FROM \"Workgroup\"" +
+						")";
+
+		try (
+				PreparedStatement insertLabModule =
+						conn.prepareStatement(insertLabModuleSql);
+
+				PreparedStatement updateWorkgroup =
+						conn.prepareStatement(updateWorkgroupSql);
+
+				PreparedStatement getMaxModule =
+						conn.prepareStatement(maxModuleSql);
+
+				PreparedStatement getWorkgroupIds =
+						conn.prepareStatement(workgroupIdsSql);
+
+				CallableStatement insertWorkgroups =
+						conn.prepareCall("{call insert_workgroups2_2(?,?)}")
+		) {
+
+			for (int i = 0; i < numOfModules; i++) {
+
+				insertLabModule.setString(1, courseCode);
+				insertLabModule.setInt(2, sernum);
+
 				double d = rand.nextDouble();
-				if(d <= 0.2)
-					pst.setString(1, "project");
-				else
-					pst.setString(1, "lab_exercise");
-				pst.executeUpdate();
-				/////////////////////////////////////////////
-				ResultSet res1 = st.executeQuery("select max(module_no) from \"LabModule\"");//subqueries not allowed in CallableStatement
-				res1.next();
-				cst.setInt(2,numOfGroups);
-				//System.out.println(res1.getInt(1));
-				cst.setInt(1,res1.getInt(1));
-				cst.execute();
-				
-				////////////////////////////////////////////
-				ResultSet wgIDs= st2.executeQuery("select \"wgID\" from  \"Workgroup\" where module_no=(select max(module_no) from \"Workgroup\")");
-				while(wgIDs.next()) {
-				pst2.setInt(1,(int) Math.round(rand.nextGaussian()*2+6));
-				pst2.setInt(2,wgIDs.getInt(1));
-				pst2.executeUpdate();
+
+				if (d <= 0.2) {
+					insertLabModule.setString(3, "project");
+				} else {
+					insertLabModule.setString(3, "lab_exercise");
 				}
-				res1.close();
-				wgIDs.close();
+
+				int numberOfMembers =
+						rand.nextInt(maxMember - minMember) + minMember;
+
+				insertLabModule.setInt(4, numberOfMembers);
+
+				insertLabModule.executeUpdate();
+				int moduleNo;
+
+				try (ResultSet res = getMaxModule.executeQuery()) {
+
+					if (!res.next()) {
+						throw new SQLException(
+								"Could not retrieve module number."
+						);
+					}
+
+					moduleNo = res.getInt(1);
+				}
+
+				/*
+				 * Create WorkGroups using the stored procedure.
+				 */
+				insertWorkgroups.setInt(1, moduleNo);
+				insertWorkgroups.setInt(2, numOfGroups);
+
+				insertWorkgroups.execute();
+
+				/*
+				 * Retrieve WorkGroup IDs and assign random grades.
+				 */
+				try (ResultSet wgIDs = getWorkgroupIds.executeQuery()) {
+
+					while (wgIDs.next()) {
+
+						int grade =
+								(int) Math.round(
+										rand.nextGaussian() * 2 + 6
+								);
+
+						updateWorkgroup.setInt(1, grade);
+						updateWorkgroup.setInt(2, wgIDs.getInt("wgID"));
+
+						updateWorkgroup.executeUpdate();
+					}
+				}
 			}
-			pst.close();
-			cst.close();
-			
-		
-		} catch (SQLException e) {
-			e.printStackTrace();
-		}
-		
-	}
-	
-	
-	
-	public void 	insert_random_Labmodules_workGroups(String courseMaterial, int numOfModules,int numOfGroups ) {
-		try {
-			Statement st = conn.createStatement();
-			ResultSet res1 = st.executeQuery("select course_code, serial_number from \"CourseRun\" c  where substring(c.course_code,1,3) ="+courseMaterial+" \r\n");
-			
-			while(res1.next()) {
-				//System.out.println(res1.getString(1)+"\t"+"\t"+res1.getInt(2)+"\t");
-				insert_Labmodules_workGroups(("'"+res1.getString(1)+"'"), res1.getInt(2), numOfModules,numOfGroups );
 
-			}			
-			res1.close();
 		} catch (SQLException e) {
 			e.printStackTrace();
 		}
-		
 	}
-	
-	
+
+	/**
+	 * Inserts random LabModules/WorkGroups for every CourseRun
+	 * whose course code starts with courseMaterial.
+	 */
+	public void insert_random_Labmodules_workGroups(String courseMaterial, int numOfModules, int numOfGroups) {
+
+		if (conn == null) {
+			System.err.println("No database connection.");
+			return;
+		}
+
+		String sql =
+				"SELECT course_code, serial_number " +
+						"FROM \"CourseRun\" " +
+						"WHERE substring(course_code, 1, 3) = ?";
+
+		try (PreparedStatement pst = conn.prepareStatement(sql)) {
+			pst.setString(1, courseMaterial);
+
+			try (ResultSet res = pst.executeQuery()) {
+
+				while (res.next()) {
+
+					String courseCode =
+							res.getString("course_code");
+
+					int serialNumber =
+							res.getInt("serial_number");
+
+					insert_Labmodules_workGroups(courseCode, serialNumber, numOfModules, numOfGroups);
+				}
+			}
+
+		} catch (SQLException e) {
+			e.printStackTrace();
+		}
+	}
+
 	public static void main(String[] args) {
- 
+
 		DbApp app = new DbApp();
-		app.dbConnect("localhost", "TechnicalSchoolDB", "postgresUser", "mypassword");
-		
-		System.out.println("Starting inserts...");
-		app.insert_random_Labmodules_workGroups("'гяу'", 200, 5);	//252 HRY
-		System.out.println("FINISHED HRY...");
-		app.insert_random_Labmodules_workGroups("'сус'", 200, 5);	//120 SYS
-		System.out.println("FINISHED SYS...");
-		app.insert_random_Labmodules_workGroups("'еме'", 200, 5);	//72 еме
-		System.out.println("FINISHED ENE...");
-		System.out.println("DONE!!!");
-		app.dbClose();
-		
-		app.dbClose();
+		String username = System.getenv("DB_USER") != null ? System.getenv("DB_USER") : "postgresUser";
+		String password = System.getenv("DB_PASSWORD") != null ? System.getenv("DB_PASSWORD") : "mypassword";
+
+		try {
+			app.dbConnect("localhost", "TechnicalSchoolDB", username, password);
+
+			System.out.println("Starting inserts...");
+			app.insert_random_Labmodules_workGroups("HRY", 200, 5);
+			System.out.println("FINISHED HRY...");
+
+			app.insert_random_Labmodules_workGroups("SYS", 200, 5);
+			System.out.println("FINISHED SYS...");
+
+			app.insert_random_Labmodules_workGroups("ENE", 200, 5);
+			System.out.println("FINISHED ENE...");
+
+			System.out.println("DONE!!!");
+		} finally {
+			app.dbClose();
+		}
 	}
-
-
 }
-
-
-
